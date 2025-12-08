@@ -2,16 +2,15 @@
 
 [CmdletBinding()]
 param(
-    [Parameter(Mandatory = $true)]
-    [ValidateScript({ Test-Path $_ -PathType Leaf })]
-    [string]$ExcelPath,
-
     [Parameter()]
     [string]$WorksheetName,
 
     [Parameter()]
     [switch]$ForceReconnect
 )
+
+# Hard-coded Excel source for validation runs.
+$ExcelPath = 'C:\Users\KristapsD\OneDrive - WeAreDots\Desktop\DeleteUsers.xlsx'
 
 # Top-level safeguard. Keep true while validating.
 $DryRun = $true
@@ -31,6 +30,10 @@ function Ensure-Module {
 
 foreach ($module in @('ImportExcel', 'Microsoft.Graph.Authentication', 'Microsoft.Graph.Groups')) {
     Ensure-Module -Name $module
+}
+
+if (-not (Test-Path $ExcelPath -PathType Leaf)) {
+    throw "Excel file was not found at '$ExcelPath'. Update the script if the location changes."
 }
 
 if ($ForceReconnect -or -not (Get-MgContext)) {
