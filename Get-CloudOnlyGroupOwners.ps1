@@ -13,6 +13,7 @@ param(
     [switch]$ForceReconnect
 )
 
+# Top-level safeguard. Keep true while validating.
 $DryRun = $true
 
 function Ensure-Module {
@@ -28,48 +29,13 @@ function Ensure-Module {
     Import-Module $Name -ErrorAction Stop | Out-Null
 }
 
-function Format-DirectoryObject {
-    param(
-        [Parameter(Mandatory = $true)]
-        [object]$DirectoryObject
-    )
-
-    $displayName = $DirectoryObject.DisplayName
-    $principal = $DirectoryObject.UserPrincipalName
-
-    if ($DirectoryObject.AdditionalProperties) {
-        if (-not $displayName -and $DirectoryObject.AdditionalProperties.ContainsKey('displayName')) {
-            $displayName = $DirectoryObject.AdditionalProperties['displayName']
-        }
-
-        if (-not $principal) {
-            foreach ($key in @('userPrincipalName', 'mail', 'appId', 'servicePrincipalType')) {
-                if ($DirectoryObject.AdditionalProperties.ContainsKey($key)) {
-                    $principal = $DirectoryObject.AdditionalProperties[$key]
-                    break
-                }
-            }
-        }
-    }
-
-    if (-not $displayName) {
-        $displayName = 'Unknown name'
-    }
-
-    if (-not $principal) {
-        $principal = $DirectoryObject.Id
-    }
-
-    return '{0} ({1})' -f $displayName, $principal
-}
-
 foreach ($module in @('ImportExcel', 'Microsoft.Graph.Authentication', 'Microsoft.Graph.Groups')) {
     Ensure-Module -Name $module
 }
 
 if ($ForceReconnect -or -not (Get-MgContext)) {
     Write-Host 'Connecting to Microsoft Graph...' -ForegroundColor Cyan
-    Connect-MgGraph -Scopes @('Group.Read.All', 'GroupMember.Read.All') -NoWelcome
+    Connect-MgGraph -Scopes @('Group.Read.All') -NoWelcome
 }
 
 if (-not (Get-MgContext)) {
@@ -78,10 +44,7 @@ if (-not (Get-MgContext)) {
 
 Write-Host ("Dry run mode is {0}" -f $(if ($DryRun) { 'ON' } else { 'OFF' })) -ForegroundColor Yellow
 
-$importParams = @{
-    Path = $ExcelPath
-}
-
+$importParams = @{ Path = $ExcelPath }
 if ($WorksheetName) {
     $importParams['WorksheetName'] = $WorksheetName
 }
@@ -104,82 +67,37 @@ if (-not $cloudGroups) {
     return
 }
 
+$foundCount = 0
+$missingCount = 0
+
 foreach ($groupRecord in $cloudGroups) {
     if (-not $groupRecord.Id) {
         Write-Warning ("Skipping row with DisplayName '{0}' because Id is missing." -f $groupRecord.DisplayName)
         continue
     }
 
+    $groupName = if ([string]::IsNullOrWhiteSpace([string]$groupRecord.DisplayName)) { '<unknown>' } else { [string]$groupRecord.DisplayName }
+
     Write-Host "`n------------------------------------------------------------"
-
-    try {
-        $groupObject = Get-MgGroup -GroupId $groupRecord.Id -Property Id,DisplayName,GroupTypes -ErrorAction Stop
-    } catch {
-        Write-Warning ("Unable to retrieve Entra ID record for group Id {0}. {1}" -f $groupRecord.Id, $_.Exception.Message)
-        $groupObject = $null
-    }
-
-    if ($groupObject) {
-        $groupName = if ([string]::IsNullOrWhiteSpace($groupObject.DisplayName)) { '<unknown>' } else { [string]$groupObject.DisplayName }
-    } else {
-        $groupName = if ([string]::IsNullOrWhiteSpace([string]$groupRecord.DisplayName)) { '<unknown>' } else { [string]$groupRecord.DisplayName }
-    }
-
     Write-Host ("DisplayName : {0}" -f $groupName) -ForegroundColor Cyan
     Write-Host ("Group Id    : {0}" -f $groupRecord.Id)
     Write-Host ("Source      : {0}" -f ($groupRecord.Source -as [string]))
-
-    if ($groupObject -and $groupObject.GroupTypes) {
-        $groupTypeValue = $groupObject.GroupTypes -join ', '
-    } elseif ($groupRecord.GroupType) {
-        $groupTypeValue = [string]$groupRecord.GroupType
-    } else {
-        $groupTypeValue = '<not specified>'
-    }
-
-    Write-Host ("GroupType   : {0}" -f $groupTypeValue)
+    Write-Host ("GroupType   : {0}" -f ([string]$groupRecord.GroupType ?? '<not specified>'))
 
     try {
-        $owners = Get-MgGroupOwner -GroupId $groupRecord.Id -All -ErrorAction Stop
+        $groupObject = Get-MgGroup -GroupId $groupRecord.Id -ErrorAction Stop
+        $foundCount++
+        Write-Host 'Status      : Found in Entra ID' -ForegroundColor Green
+        if ($DryRun) {
+            Write-Host '  [DryRun] Validation only. No changes were made.' -ForegroundColor Yellow
+        }
     } catch {
-        Write-Warning ("Failed to retrieve owners for group {0}. {1}" -f $groupRecord.Id, $_.Exception.Message)
-        $owners = @()
-    }
-
-    try {
-        $members = Get-MgGroupMember -GroupId $groupRecord.Id -All -ErrorAction Stop
-    } catch {
-        Write-Warning ("Failed to retrieve members for group {0}. {1}" -f $groupRecord.Id, $_.Exception.Message)
-        $members = @()
-    }
-
-    $ownerSummaries = @()
-    foreach ($owner in $owners) {
-        $ownerSummaries += (Format-DirectoryObject -DirectoryObject $owner)
-    }
-
-    $memberSummaries = @()
-    foreach ($member in $members) {
-        $memberSummaries += (Format-DirectoryObject -DirectoryObject $member)
-    }
-
-    Write-Host ("Owners   ({0})" -f $ownerSummaries.Count)
-    if ($ownerSummaries.Count -gt 0) {
-        $ownerSummaries | ForEach-Object { Write-Host ("  - {0}" -f $_) }
-    } else {
-        Write-Host '  - None found'
-    }
-
-    Write-Host ("Members  ({0})" -f $memberSummaries.Count)
-    if ($memberSummaries.Count -gt 0) {
-        $memberSummaries | ForEach-Object { Write-Host ("  - {0}" -f $_) }
-    } else {
-        Write-Host '  - None found'
-    }
-
-    if ($DryRun) {
-        Write-Host '  [DryRun] Validation only. No owner/member changes were made.' -ForegroundColor Yellow
+        $missingCount++
+        Write-Warning ("Status      : NOT found in Entra ID. {0}" -f $_.Exception.Message)
     }
 }
 
-Write-Host "`nCompleted cloud-only group evaluation." -ForegroundColor Green
+Write-Host "`nSummary" -ForegroundColor Cyan
+Write-Host ("  Found groups   : {0}" -f $foundCount)
+Write-Host ("  Missing groups : {0}" -f $missingCount)
+Write-Host "Completed cloud-only group lookup." -ForegroundColor Green
