@@ -85,7 +85,8 @@ foreach ($groupRecord in $cloudGroups) {
     Write-Host ("DisplayName : {0}" -f $groupName) -ForegroundColor Cyan
     Write-Host ("Group Id    : {0}" -f $groupRecord.Id)
     Write-Host ("Source      : {0}" -f ($groupRecord.Source -as [string]))
-    Write-Host ("GroupType   : {0}" -f ([string]$groupRecord.GroupType ?? '<not specified>'))
+    $groupTypeValue = if ([string]::IsNullOrWhiteSpace([string]$groupRecord.GroupType)) { '<not specified>' } else { [string]$groupRecord.GroupType }
+    Write-Host ("GroupType   : {0}" -f $groupTypeValue)
 
     try {
         $groupObject = Get-MgGroup -GroupId $groupRecord.Id -ErrorAction Stop
