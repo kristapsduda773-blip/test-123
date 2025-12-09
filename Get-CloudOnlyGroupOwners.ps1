@@ -63,7 +63,11 @@ if (-not $groupRows) {
     return
 }
 
-$cloudGroups = $groupRows | Where-Object { $_.Source -eq 'CloudOnly' }
+$cloudGroups = $groupRows | Where-Object {
+    $sourceValue = $_.Source -as [string]
+    if (-not $sourceValue) { return $false }
+    return $sourceValue.Trim().Equals('CloudOnly', [System.StringComparison]::InvariantCultureIgnoreCase)
+}
 
 if (-not $cloudGroups) {
     Write-Host "No groups with Source = 'CloudOnly' were found in the provided file."
