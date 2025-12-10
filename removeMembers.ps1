@@ -205,7 +205,7 @@ if ($owners.Count -eq 0) {
     Write-Host ("Removing {0} owners from '{1}'" -f $owners.Count, $GroupDisplayName) -ForegroundColor Red
 }
 
-if ($placeholderOwner) {
+if ($placeholderOwner -and $owners.Count -gt 0) {
     $isPlaceholderAlreadyOwner = $owners | Where-Object { $_.Id -eq $placeholderOwner.Id }
     if (-not $isPlaceholderAlreadyOwner) {
         Write-Host ("Adding placeholder owner '{0}' before removals..." -f $NewOwnerUserPrincipalName) -ForegroundColor Cyan
@@ -224,6 +224,8 @@ if ($placeholderOwner) {
     } else {
         Write-Host ("Placeholder owner '{0}' is already assigned to the group." -f $NewOwnerUserPrincipalName) -ForegroundColor Cyan
     }
+} elseif ($placeholderOwner -and $owners.Count -eq 0) {
+    Write-Host ("Skipping placeholder owner addition. '{0}' currently has no owners to remove." -f $GroupDisplayName) -ForegroundColor Yellow
 }
 
 $memberRemoved = 0
