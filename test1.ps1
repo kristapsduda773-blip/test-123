@@ -31,6 +31,40 @@ function Ensure-Module {
     Import-Module $Name -ErrorAction Stop | Out-Null
 }
 
+function ConvertTo-NormalizedRow {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [psobject]$Row
+    )
+
+    $normalized = [ordered]@{}
+
+    foreach ($prop in $Row.PSObject.Properties) {
+        if (-not $prop.Name) {
+            continue
+        }
+
+        $propertyName = $prop.Name.Trim()
+        if (-not $propertyName) {
+            continue
+        }
+
+        if ($normalized.Contains($propertyName)) {
+            continue
+        }
+
+        $value = $prop.Value
+        if ($value -is [string]) {
+            $value = $value.Trim()
+        }
+
+        $normalized[$propertyName] = $value
+    }
+
+    return [pscustomobject]$normalized
+}
+
 foreach ($module in @('ImportExcel', 'Microsoft.Graph.Authentication', 'Microsoft.Graph.Groups')) {
     Ensure-Module -Name $module
 }
@@ -66,7 +100,21 @@ if (-not $groupRows) {
     return
 }
 
-$cloudGroups = $groupRows | Where-Object { $_.Source -eq 'CloudOnly' }
+$groupRows = @($groupRows | ForEach-Object { ConvertTo-NormalizedRow -Row $_ })
+
+$cloudGroups = $groupRows | Where-Object {
+    $sourceValue = $_.Source
+    if ($null -eq $sourceValue) {
+        return $false
+    }
+
+    $normalizedSource = ([string]$sourceValue).Trim()
+    if ([string]::IsNullOrWhiteSpace($normalizedSource)) {
+        return $false
+    }
+
+    return $normalizedSource -ieq 'CloudOnly'
+}
 
 if (-not $cloudGroups) {
     Write-Host "No groups with Source = 'CloudOnly' were found in the provided file."
