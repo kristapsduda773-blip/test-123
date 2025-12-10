@@ -1,13 +1,10 @@
 #requires -Version 5.1
 #requires -Modules ActiveDirectory, ImportExcel
 
-[CmdletBinding()]
+[CmdletBinding(SupportsShouldProcess = $true)]
 param(
     [Parameter()]
-    [string]$ExcelPath = 'C:\Users\KristapsD\OneDrive - WeAreDots\Desktop\DeleteUsers.xlsx',
-
-    [Parameter()]
-    [string]$WorksheetName,
+    [string[]]$GroupNames,
 
     [Parameter()]
     [string]$OutputPath,
@@ -19,6 +16,20 @@ param(
     [switch]$ForceModuleReload
 )
 
+$DefaultGroupNames = @(
+    'DEV-ACTODLU','DEV-ADL','DEV-ADR','DEV-AIHEN','DEV-ALFAPV','DEV-ALFAPV-red',
+    'DEV-ALFA-WSO2','DEV-ALTI','DEV-ALTUM','DEV-Apaksstacijas','DEV-APR','DEV-APUS',
+    'DEV-Autostrade','DEV-AVIS','DEV-BDAS','DEV-Blokweb','DEV-CAKEHR','DEV-CSP-KLASIS',
+    'DEV-DELTAPV','DEV-DVS','DEV-EIS','DEV-ELIS','DEV-EPS','DEV-ESKORT-EMCS',
+    'DEV-ESTAPIKS','DEV-ESTAPIKS2','DEV-GAMMAPV','DEV-GPIS','DEV-IDMRII','DEV-INDTRA',
+    'DEV-INTRANET','DEV-ITKC','DEV-LAMBDA','DEV-LAMBDAPV','DEV-LGAP','DEV-LNBACTO',
+    'DEV-LP','DEV-LRPV','DEV-LSR','DEV-LVC','DEV-MANAGEMENT','DEV-MobitouchID',
+    'DEV-NILDA','DEV-NILDA2','DEV-OMEGAPV','DEV-PERUZA-SIKPAKAS','DEV-PRESERVICA',
+    'DEV-REID','DEV-RigasAcs','DEV-RSIIS','DEV-SAMS','DEV-SIGMAPV','DEV-SKUS','DEV-SNIP',
+    'DEV-VirtualaisBirojs','DEV-VISTA2','DEV-VKL','DEV-VPiepirkums','DEV-VPPP',
+    'DEV-VR-ABC-varti','DEV-WSO2','DEV-ZETAPV','PV-Zeta'
+)
+
 function Ensure-Module {
     param([Parameter(Mandatory = $true)][string]$Name)
 
@@ -27,40 +38,26 @@ function Ensure-Module {
     }
 
     if (-not (Get-Module -ListAvailable -Name $Name)) {
-        throw "Required module '$Name' is not installed. Install with: Install-WindowsFeature RSAT-AD-PowerShell"
+        throw "Required module '$Name' is not installed. Install RSAT tools to proceed."
     }
 
     Import-Module $Name -ErrorAction Stop | Out-Null
 }
 
-function ConvertTo-CleanGroupRow {
-    param([Parameter(Mandatory = $true)][psobject]$Row)
+function Resolve-PrincipalDetails {
+    param([Parameter(Mandatory = $true)][Microsoft.ActiveDirectory.Management.ADObject]$DirectoryObject)
 
-    $normalized = [ordered]@{}
+    $displayName = if ($DirectoryObject.DisplayName) { $DirectoryObject.DisplayName } else { $DirectoryObject.Name }
+    $upnOrMail = $DirectoryObject.UserPrincipalName
+    if (-not $upnOrMail -and $DirectoryObject.mail) { $upnOrMail = $DirectoryObject.mail }
+    if (-not $upnOrMail -and $DirectoryObject.SamAccountName) { $upnOrMail = $DirectoryObject.SamAccountName }
 
-    foreach ($prop in $Row.PSObject.Properties) {
-        $rawName = $prop.Name
-        if (-not $rawName) { continue }
-
-        $trimmedName = $rawName.Trim()
-        if (-not $trimmedName) { continue }
-
-        $standardName = switch -Regex ($trimmedName) {
-            '^displayname$' { 'DisplayName'; break }
-            '^id$' { 'Id'; break }
-            '^source$' { 'Source'; break }
-            '^grouptype$' { 'GroupType'; break }
-            default { $trimmedName }
-        }
-
-        if ($normalized.Contains($standardName)) { continue }
-
-        $value = $prop.Value
-        if ($value -is [string]) { $value = $value.Trim() }
-        $normalized[$standardName] = $value
+    [pscustomobject]@{
+        DisplayName       = $displayName
+        UserPrincipalName = $upnOrMail
+        ObjectId          = $DirectoryObject.ObjectGUID.Guid
+        ObjectClass       = $DirectoryObject.ObjectClass
     }
-
-    return [pscustomobject]$normalized
 }
 
 function New-PrincipalRecord {
@@ -82,143 +79,106 @@ function New-PrincipalRecord {
     }
 }
 
-function Resolve-PrincipalDetails {
-    param(
-        [Parameter(Mandatory = $true)][Microsoft.ActiveDirectory.Management.ADObject]$DirectoryObject
-    )
+function Get-ADGroupByIdentity {
+    param([Parameter(Mandatory = $true)][string]$Identity)
 
-    $mail = $DirectoryObject.mail
-    $upn = $DirectoryObject.UserPrincipalName
-    if (-not $upn -and $DirectoryObject.SamAccountName) {
-        $upn = $DirectoryObject.SamAccountName
+    $properties = @('ManagedBy','mail','SamAccountName','DisplayName','ObjectGuid','DistinguishedName')
+
+    try {
+        return Get-ADGroup -Identity $Identity -Properties $properties -ErrorAction Stop
+    } catch {
+        # Fall through to filter search
     }
 
-    [pscustomobject]@{
-        DisplayName       = $DirectoryObject.DisplayName
-        UserPrincipalName = $upn
-        ObjectId          = $DirectoryObject.ObjectGUID.Guid
-        ObjectClass       = $DirectoryObject.ObjectClass
+    $escaped = $Identity.Replace("'", "''")
+    $result = Get-ADGroup -Filter "DisplayName -eq '$escaped'" -Properties $properties
+    if (-not $result) {
+        return $null
     }
+
+    if ($result.Count -gt 1) {
+        Write-Warning ("Multiple groups with DisplayName '{0}' detected. Using the first result." -f $Identity)
+        return $result | Select-Object -First 1
+    }
+
+    return $result
 }
 
 Ensure-Module -Name ActiveDirectory
 Ensure-Module -Name ImportExcel
 
-if (-not (Test-Path $ExcelPath -PathType Leaf)) {
-    throw "Excel file was not found at '$ExcelPath'. Update -ExcelPath parameter if needed."
+if (-not $GroupNames -or $GroupNames.Count -eq 0) {
+    $GroupNames = $DefaultGroupNames
+}
+
+$GroupNames = $GroupNames | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Sort-Object -Unique
+
+if (-not $GroupNames) {
+    throw 'No group names were supplied after filtering empty values.'
 }
 
 if (-not $OutputPath) {
     $timestamp = Get-Date -Format 'yyyyMMdd_HHmmss'
-    $OutputPath = Join-Path -Path (Split-Path -Path $ExcelPath -Parent) -ChildPath "OnPremGroupPrincipals_$timestamp.xlsx"
+    $OutputPath = Join-Path -Path (Get-Location) -ChildPath "OnPremGroupPrincipals_$timestamp.xlsx"
 }
 
-$importParams = @{ Path = $ExcelPath }
-if ($WorksheetName) { $importParams['WorksheetName'] = $WorksheetName }
-
-try {
-    $groupRows = Import-Excel @importParams
-} catch {
-    throw "Failed to import Excel file '$ExcelPath'. $_"
-}
-
-if (-not $groupRows) {
-    Write-Warning 'The Excel file contained no rows to process.'
-    return
-}
-
-$groupRows = @(
-    foreach ($row in $groupRows) {
-        $cleanRow = ConvertTo-CleanGroupRow -Row $row
-        if (-not $cleanRow.Id -and -not $cleanRow.DisplayName) { continue }
-        $cleanRow
-    }
-)
-
-if (-not $groupRows) {
-    Write-Warning 'No usable rows (DisplayName or Id) were present in the spreadsheet.'
-    return
-}
+Write-Host "Processing {0} group names..." -f $GroupNames.Count -ForegroundColor Cyan
 
 $principalRecords = @()
 $processedGroups = 0
 $missingGroups = 0
 
-foreach ($groupRecord in $groupRows) {
-    $groupId = $null
-    $groupIdentity = $null
-
-    if ($groupRecord.Id) {
-        $guidRef = [ref]([guid]::Empty)
-        if ([guid]::TryParse([string]$groupRecord.Id, $guidRef)) {
-            $groupIdentity = $guidRef.Value
-        }
-    }
-
-    if (-not $groupIdentity -and $groupRecord.DisplayName) {
-        $groupIdentity = $groupRecord.DisplayName
-    }
-
-    if (-not $groupIdentity) {
-        Write-Warning "Skipping row because no Id or DisplayName is available."
-        continue
-    }
-
+foreach ($groupName in $GroupNames) {
     Write-Host "`n------------------------------------------------------------"
-    Write-Host ("Group lookup : {0}" -f $groupIdentity) -ForegroundColor Cyan
+    Write-Host ("Group lookup : {0}" -f $groupName) -ForegroundColor Cyan
 
-    try {
-        $group = Get-ADGroup -Identity $groupIdentity -Properties ManagedBy, mail, SamAccountName, DisplayName, ObjectGuid -ErrorAction Stop
-        $processedGroups++
-        $groupName = if ($group.DisplayName) { $group.DisplayName } else { $group.SamAccountName }
-        $groupId = $group.ObjectGUID.Guid
-        Write-Host ("DisplayName : {0}" -f $groupName)
-        Write-Host ("ObjectGuid  : {0}" -f $groupId)
-        Write-Host ("ManagedBy   : {0}" -f ($group.ManagedBy ?? '<not set>'))
-    } catch {
+    $group = Get-ADGroupByIdentity -Identity $groupName
+    if (-not $group) {
         $missingGroups++
-        Write-Warning ("Unable to find group '{0}'. {1}" -f $groupIdentity, $_.Exception.Message)
+        Write-Warning ("Unable to locate group '{0}' in Active Directory." -f $groupName)
         continue
     }
+
+    $processedGroups++
+    $resolvedName = if ($group.DisplayName) { $group.DisplayName } else { $group.SamAccountName }
+    $groupId = $group.ObjectGUID.Guid
+
+    Write-Host ("DisplayName : {0}" -f $resolvedName)
+    Write-Host ("ObjectGuid  : {0}" -f $groupId)
+    Write-Host ("ManagedBy   : {0}" -f ($group.ManagedBy ?? '<not set>'))
 
     $owners = @()
     if ($group.ManagedBy) {
         try {
-            $ownerObject = Get-ADObject -Identity $group.ManagedBy -Properties DisplayName, SamAccountName, mail, UserPrincipalName, ObjectClass
-            $owners = @(Resolve-PrincipalDetails -DirectoryObject $ownerObject)
-            foreach ($owner in $owners) {
-                $principalRecords += New-PrincipalRecord -GroupName $group.DisplayName -GroupId $groupId -Role 'Owner' -Principal $owner
-            }
-            Write-Host ("Owners     : {0}" -f ($owners.Count))
+            $ownerObject = Get-ADObject -Identity $group.ManagedBy -Properties DisplayName, SamAccountName, mail, UserPrincipalName, ObjectClass, ObjectGuid
+            $ownerDetails = Resolve-PrincipalDetails -DirectoryObject $ownerObject
+            $owners = @($ownerDetails)
+            $principalRecords += New-PrincipalRecord -GroupName $resolvedName -GroupId $groupId -Role 'Owner' -Principal $ownerDetails
         } catch {
             Write-Warning ("Failed to resolve ManagedBy reference '{0}'. {1}" -f $group.ManagedBy, $_.Exception.Message)
         }
-    } else {
-        Write-Host 'Owners     : <none>' -ForegroundColor Yellow
     }
+
+    Write-Host ("Owners     : {0}" -f ($owners.Count))
 
     try {
         $memberParams = @{ Identity = $group.DistinguishedName; ErrorAction = 'Stop' }
         if ($IncludeNestedMembers) { $memberParams['Recursive'] = $true }
         $members = @(Get-ADGroupMember @memberParams)
     } catch {
-        Write-Warning ("Failed to retrieve members for '{0}'. {1}" -f $group.DisplayName, $_.Exception.Message)
+        Write-Warning ("Failed to retrieve members for '{0}'. {1}" -f $resolvedName, $_.Exception.Message)
         continue
     }
 
-    if ($members.Count -eq 0) {
-        Write-Host 'Members    : <none>' -ForegroundColor Yellow
-    } else {
-        Write-Host ("Members    : {0}" -f $members.Count)
-    }
+    Write-Host ("Members    : {0}" -f $members.Count)
 
     foreach ($member in $members) {
         try {
-            $memberObject = Get-ADObject -Identity $member.DistinguishedName -Properties DisplayName, SamAccountName, mail, UserPrincipalName, ObjectClass
+            $memberObject = Get-ADObject -Identity $member.DistinguishedName -Properties DisplayName, SamAccountName, mail, UserPrincipalName, ObjectClass, ObjectGuid
             $memberDetails = Resolve-PrincipalDetails -DirectoryObject $memberObject
-            $principalRecords += New-PrincipalRecord -GroupName $group.DisplayName -GroupId $groupId -Role 'Member' -Principal $memberDetails
+            $principalRecords += New-PrincipalRecord -GroupName $resolvedName -GroupId $groupId -Role 'Member' -Principal $memberDetails
         } catch {
-            Write-Warning ("Unable to resolve member {0}. {1}" -f $member.DistinguishedName, $_.Exception.Message)
+            Write-Warning ("Unable to resolve member '{0}'. {1}" -f $member.DistinguishedName, $_.Exception.Message)
         }
     }
 }
