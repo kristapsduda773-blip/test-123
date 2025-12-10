@@ -61,6 +61,25 @@ function Get-PrincipalLabel {
     return $Principal.Id
 }
 
+function Add-GroupOwnerReference {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$GroupId,
+
+        [Parameter(Mandatory = $true)]
+        [string]$OwnerId
+    )
+
+    $addCmd = Get-Command -Name Add-MgGroupOwnerByRef -ErrorAction SilentlyContinue
+    if ($addCmd) {
+        Add-MgGroupOwnerByRef -GroupId $GroupId -DirectoryObjectId $OwnerId -ErrorAction Stop
+        return
+    }
+
+    $body = @{ '@odata.id' = "https://graph.microsoft.com/v1.0/directoryObjects/$OwnerId" } | ConvertTo-Json
+    Invoke-MgGraphRequest -Method POST -Uri "https://graph.microsoft.com/v1.0/groups/$GroupId/owners/\$ref" -Body $body -ContentType 'application/json' -ErrorAction Stop
+}
+
 foreach ($module in @('Microsoft.Graph.Authentication', 'Microsoft.Graph.Groups', 'Microsoft.Graph.Users')) {
     Ensure-Module -Name $module
 }
@@ -137,10 +156,15 @@ if ($placeholderOwner) {
     $isPlaceholderAlreadyOwner = $owners | Where-Object { $_.Id -eq $placeholderOwner.Id }
     if (-not $isPlaceholderAlreadyOwner) {
         Write-Host ("Adding placeholder owner '{0}' before removals..." -f $NewOwnerUserPrincipalName) -ForegroundColor Cyan
+        $shouldAdd = $PSCmdlet.ShouldProcess($NewOwnerUserPrincipalName, "Add placeholder owner to $GroupDisplayName")
         try {
-            Add-MgGroupOwnerByRef -GroupId $targetGroup.Id -DirectoryObjectId $placeholderOwner.Id -ErrorAction Stop
-            # Refresh owner list to include newly added owner
-            $owners = @( $owners + $placeholderOwner )
+            if ($shouldAdd) {
+                Add-GroupOwnerReference -GroupId $targetGroup.Id -OwnerId $placeholderOwner.Id
+                # Refresh owner list to include newly added owner
+                $owners = @( $owners + $placeholderOwner )
+            } else {
+                Write-Host '  Skipped adding placeholder owner because ShouldProcess was denied.' -ForegroundColor Yellow
+            }
         } catch {
             throw "Failed to add placeholder owner '$NewOwnerUserPrincipalName'. $_"
         }
