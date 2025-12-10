@@ -237,6 +237,24 @@ if (-not $groupRows) {
     return
 }
 
+$groupRows = $groupRows | Where-Object {
+    if (-not $_.PSObject.Properties['Source']) {
+        return $false
+    }
+
+    $sourceValue = ([string]$_.Source).Trim()
+    if ([string]::IsNullOrWhiteSpace($sourceValue)) {
+        return $false
+    }
+
+    return $sourceValue -ieq 'CloudOnly'
+}
+
+if (-not $groupRows) {
+    Write-Warning "No rows with Source = 'CloudOnly' were found in the spreadsheet."
+    return
+}
+
 $removalRecords = @()
 $totalAttempted = 0
 $totalGroupsProcessed = 0
