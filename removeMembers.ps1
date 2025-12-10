@@ -61,23 +61,60 @@ function Get-PrincipalLabel {
     return $Principal.Id
 }
 
+function Get-DirectoryObjectResourceSegment {
+    param(
+        [Parameter(Mandatory = $true)]
+        [Microsoft.Graph.PowerShell.Models.IMicrosoftGraphDirectoryObject]$DirectoryObject
+    )
+
+    $odataType = $null
+    if ($DirectoryObject.PSObject.Properties['AdditionalProperties']) {
+        $odataType = $DirectoryObject.AdditionalProperties['@odata.type']
+    }
+
+    if (-not $odataType -and $DirectoryObject.PSObject.TypeNames) {
+        foreach ($typeName in $DirectoryObject.PSObject.TypeNames) {
+            if ($typeName -match 'MicrosoftGraph([A-Za-z]+)$') {
+                $odataType = "#microsoft.graph.{0}" -f $matches[1].ToLower()
+                break
+            }
+        }
+    }
+
+    switch -Regex ($odataType) {
+        'serviceprincipal' { return 'servicePrincipals' }
+        'group' { return 'groups' }
+        'user' { return 'users' }
+        default { return 'directoryObjects' }
+    }
+}
+
 function Add-GroupOwnerReference {
     param(
         [Parameter(Mandatory = $true)]
         [string]$GroupId,
 
         [Parameter(Mandatory = $true)]
-        [string]$OwnerId
+        [Microsoft.Graph.PowerShell.Models.IMicrosoftGraphDirectoryObject]$OwnerObject
     )
 
+    $ownerId = $OwnerObject.Id
+    if ([string]::IsNullOrWhiteSpace($ownerId)) {
+        throw 'OwnerObject.Id was not populated.'
+    }
+
+    $resourceSegment = Get-DirectoryObjectResourceSegment -DirectoryObject $OwnerObject
+
     $addCmd = Get-Command -Name Add-MgGroupOwnerByRef -ErrorAction SilentlyContinue
+    $body = @{ '@odata.id' = "https://graph.microsoft.com/v1.0/$resourceSegment/$ownerId" }
+
     if ($addCmd) {
-        Add-MgGroupOwnerByRef -GroupId $GroupId -DirectoryObjectId $OwnerId -ErrorAction Stop
+        Add-MgGroupOwnerByRef -GroupId $GroupId -BodyParameter $body -ErrorAction Stop
         return
     }
 
-    $body = @{ '@odata.id' = "https://graph.microsoft.com/v1.0/directoryObjects/$OwnerId" } | ConvertTo-Json
-    Invoke-MgGraphRequest -Method POST -Uri "https://graph.microsoft.com/v1.0/groups/$GroupId/owners/\$ref" -Body $body -ContentType 'application/json' -ErrorAction Stop
+    $jsonBody = $body | ConvertTo-Json -Depth 3 -Compress
+    Invoke-MgGraphRequest -Method POST -Uri "https://graph.microsoft.com/v1.0/groups/$GroupId/owners/\$ref" -Body $jsonBody -ContentType 'application/json' -ErrorAction Stop
 }
 
 foreach ($module in @('Microsoft.Graph.Authentication', 'Microsoft.Graph.Groups', 'Microsoft.Graph.Users')) {
@@ -159,7 +196,7 @@ if ($placeholderOwner) {
         $shouldAdd = $PSCmdlet.ShouldProcess($NewOwnerUserPrincipalName, "Add placeholder owner to $GroupDisplayName")
         try {
             if ($shouldAdd) {
-                Add-GroupOwnerReference -GroupId $targetGroup.Id -OwnerId $placeholderOwner.Id
+                Add-GroupOwnerReference -GroupId $targetGroup.Id -OwnerObject $placeholderOwner
                 # Refresh owner list to include newly added owner
                 $owners = @( $owners + $placeholderOwner )
             } else {
