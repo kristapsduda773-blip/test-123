@@ -69,15 +69,27 @@ function Get-DirectoryObjectResourceSegment {
         [Microsoft.Graph.PowerShell.Models.IMicrosoftGraphDirectoryObject]$DirectoryObject
     )
 
-    if ($DirectoryObject -is [Microsoft.Graph.PowerShell.Models.IMicrosoftGraphUser]) {
+    $userTypes = @(
+        [Microsoft.Graph.PowerShell.Models.IMicrosoftGraphUser],
+        [Microsoft.Graph.PowerShell.Models.MicrosoftGraphUser]
+    )
+    if ($userTypes | Where-Object { $DirectoryObject -is $_ }) {
         return 'users'
     }
 
-    if ($DirectoryObject -is [Microsoft.Graph.PowerShell.Models.IMicrosoftGraphServicePrincipal]) {
+    $spTypes = @(
+        [Microsoft.Graph.PowerShell.Models.IMicrosoftGraphServicePrincipal],
+        [Microsoft.Graph.PowerShell.Models.MicrosoftGraphServicePrincipal]
+    )
+    if ($spTypes | Where-Object { $DirectoryObject -is $_ }) {
         return 'servicePrincipals'
     }
 
-    if ($DirectoryObject -is [Microsoft.Graph.PowerShell.Models.IMicrosoftGraphGroup]) {
+    $groupTypes = @(
+        [Microsoft.Graph.PowerShell.Models.IMicrosoftGraphGroup],
+        [Microsoft.Graph.PowerShell.Models.MicrosoftGraphGroup]
+    )
+    if ($groupTypes | Where-Object { $DirectoryObject -is $_ }) {
         return 'groups'
     }
 
