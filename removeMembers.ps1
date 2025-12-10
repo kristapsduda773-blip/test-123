@@ -69,6 +69,18 @@ function Get-DirectoryObjectResourceSegment {
         [Microsoft.Graph.PowerShell.Models.IMicrosoftGraphDirectoryObject]$DirectoryObject
     )
 
+    if ($DirectoryObject -is [Microsoft.Graph.PowerShell.Models.IMicrosoftGraphUser]) {
+        return 'users'
+    }
+
+    if ($DirectoryObject -is [Microsoft.Graph.PowerShell.Models.IMicrosoftGraphServicePrincipal]) {
+        return 'servicePrincipals'
+    }
+
+    if ($DirectoryObject -is [Microsoft.Graph.PowerShell.Models.IMicrosoftGraphGroup]) {
+        return 'groups'
+    }
+
     $odataType = $null
     if ($DirectoryObject.PSObject.Properties['AdditionalProperties']) {
         $odataType = $DirectoryObject.AdditionalProperties['@odata.type']
@@ -108,10 +120,12 @@ function Add-GroupOwnerReference {
     $resourceSegment = Get-DirectoryObjectResourceSegment -DirectoryObject $OwnerObject
 
     $addCmd = Get-Command -Name Add-MgGroupOwnerByRef -ErrorAction SilentlyContinue
-    $body = @{ '@odata.id' = "https://graph.microsoft.com/v1.0/$resourceSegment/$ownerId" }
+    $body = @{
+        '@odata.id' = "https://graph.microsoft.com/v1.0/$resourceSegment/$ownerId"
+    }
 
     if ($addCmd) {
-        Add-MgGroupOwnerByRef -GroupId $GroupId -BodyParameter $body -ErrorAction Stop
+        Add-MgGroupOwnerByRef -GroupId $GroupId -DirectoryObjectId $ownerId -BodyParameter $body -ErrorAction Stop
         return
     }
 
