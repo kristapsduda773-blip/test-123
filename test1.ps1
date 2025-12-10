@@ -75,6 +75,48 @@ function New-PrincipalRecord {
     }
 }
 
+function ConvertTo-CleanGroupRow {
+    param(
+        [Parameter(Mandatory = $true)]
+        [psobject]$Row
+    )
+
+    $normalized = [ordered]@{}
+
+    foreach ($prop in $Row.PSObject.Properties) {
+        $rawName = $prop.Name
+        if (-not $rawName) {
+            continue
+        }
+
+        $trimmedName = $rawName.Trim()
+        if (-not $trimmedName) {
+            continue
+        }
+
+        $standardName = switch -Regex ($trimmedName) {
+            '^displayname$' { 'DisplayName'; break }
+            '^id$' { 'Id'; break }
+            '^source$' { 'Source'; break }
+            '^grouptype$' { 'GroupType'; break }
+            default { $trimmedName }
+        }
+
+        if ($normalized.Contains($standardName)) {
+            continue
+        }
+
+        $value = $prop.Value
+        if ($value -is [string]) {
+            $value = $value.Trim()
+        }
+
+        $normalized[$standardName] = $value
+    }
+
+    return [pscustomobject]$normalized
+}
+
 foreach ($module in @('ImportExcel', 'Microsoft.Graph.Authentication', 'Microsoft.Graph.Groups')) {
     Ensure-Module -Name $module
 }
@@ -105,13 +147,36 @@ if ($WorksheetName) {
 }
 
 try {
-    $groupRows = Import-Excel @importParams | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_.Id) }
+    $groupRows = Import-Excel @importParams
 } catch {
     throw "Failed to import Excel file '$ExcelPath'. $_"
 }
 
 if (-not $groupRows) {
-    Write-Warning 'The Excel file contained no rows with an Id column.'
+    Write-Warning 'The Excel file contained no rows.'
+    return
+}
+
+$groupRows = @(
+    foreach ($row in $groupRows) {
+        $cleanRow = ConvertTo-CleanGroupRow -Row $row
+
+        if (-not $cleanRow.PSObject.Properties['Id']) {
+            continue
+        }
+
+        $idValue = ([string]$cleanRow.Id).Trim()
+        if ([string]::IsNullOrWhiteSpace($idValue)) {
+            continue
+        }
+
+        $cleanRow | Add-Member -NotePropertyName 'Id' -NotePropertyValue $idValue -Force
+        $cleanRow
+    }
+)
+
+if (-not $groupRows) {
+    Write-Warning "The Excel file contained no rows with a usable 'Id' column."
     return
 }
 
