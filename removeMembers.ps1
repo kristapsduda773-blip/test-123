@@ -1,9 +1,12 @@
-#requires -Modules Microsoft.Graph.Authentication, Microsoft.Graph.Groups
+#requires -Modules Microsoft.Graph.Authentication, Microsoft.Graph.Groups, Microsoft.Graph.Users
 
 [CmdletBinding(SupportsShouldProcess = $true, ConfirmImpact = 'High')]
 param(
     [Parameter()]
     [string]$GroupDisplayName = 'DEV-Common-Localization',
+
+    [Parameter()]
+    [string]$NewOwnerUserPrincipalName = 'GroupUserKristaps@wearedots.com',
 
     [Parameter()]
     [switch]$ForceReconnect
@@ -58,13 +61,13 @@ function Get-PrincipalLabel {
     return $Principal.Id
 }
 
-foreach ($module in @('Microsoft.Graph.Authentication', 'Microsoft.Graph.Groups')) {
+foreach ($module in @('Microsoft.Graph.Authentication', 'Microsoft.Graph.Groups', 'Microsoft.Graph.Users')) {
     Ensure-Module -Name $module
 }
 
 if ($ForceReconnect -or -not (Get-MgContext)) {
     Write-Host 'Connecting to Microsoft Graph...' -ForegroundColor Cyan
-    Connect-MgGraph -Scopes @('Group.ReadWrite.All', 'GroupMember.Read.All') -NoWelcome
+    Connect-MgGraph -Scopes @('Group.ReadWrite.All', 'GroupMember.Read.All', 'User.Read.All') -NoWelcome
 }
 
 if (-not (Get-MgContext)) {
@@ -96,6 +99,16 @@ if ($matchingGroups.Count -gt 1) {
 $targetGroup = $matchingGroups | Select-Object -First 1
 Write-Host ("Target group Id: {0}" -f $targetGroup.Id)
 
+$placeholderOwner = $null
+if (-not [string]::IsNullOrWhiteSpace($NewOwnerUserPrincipalName)) {
+    try {
+        $placeholderOwner = Get-MgUser -UserId $NewOwnerUserPrincipalName -ErrorAction Stop
+        Write-Host ("Resolved placeholder owner '{0}' (ObjectId: {1})" -f $NewOwnerUserPrincipalName, $placeholderOwner.Id)
+    } catch {
+        throw "Unable to resolve placeholder owner '$NewOwnerUserPrincipalName'. $_"
+    }
+}
+
 try {
     $members = @(Get-MgGroupMember -GroupId $targetGroup.Id -All -ErrorAction Stop)
 } catch {
@@ -120,6 +133,22 @@ if ($owners.Count -eq 0) {
     Write-Host ("Removing {0} owners from '{1}'" -f $owners.Count, $GroupDisplayName) -ForegroundColor Red
 }
 
+if ($placeholderOwner) {
+    $isPlaceholderAlreadyOwner = $owners | Where-Object { $_.Id -eq $placeholderOwner.Id }
+    if (-not $isPlaceholderAlreadyOwner) {
+        Write-Host ("Adding placeholder owner '{0}' before removals..." -f $NewOwnerUserPrincipalName) -ForegroundColor Cyan
+        try {
+            Add-MgGroupOwnerByRef -GroupId $targetGroup.Id -DirectoryObjectId $placeholderOwner.Id -ErrorAction Stop
+            # Refresh owner list to include newly added owner
+            $owners = @( $owners + $placeholderOwner )
+        } catch {
+            throw "Failed to add placeholder owner '$NewOwnerUserPrincipalName'. $_"
+        }
+    } else {
+        Write-Host ("Placeholder owner '{0}' is already assigned to the group." -f $NewOwnerUserPrincipalName) -ForegroundColor Cyan
+    }
+}
+
 $memberRemoved = 0
 $memberFailed = 0
 $ownerRemoved = 0
@@ -141,7 +170,12 @@ foreach ($member in $members) {
     }
 }
 
-foreach ($owner in $owners) {
+$ownersToRemove = $owners
+if ($placeholderOwner) {
+    $ownersToRemove = $owners | Where-Object { $_.Id -ne $placeholderOwner.Id }
+}
+
+foreach ($owner in $ownersToRemove) {
     $label = Get-PrincipalLabel -Principal $owner
     if (-not $PSCmdlet.ShouldProcess($label, "Remove owner from $GroupDisplayName")) {
         continue
