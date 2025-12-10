@@ -102,39 +102,70 @@ try {
     throw "Failed to retrieve members for group '$GroupDisplayName'. $_"
 }
 
-if ($members.Count -eq 0) {
-    Write-Host "Group '$GroupDisplayName' has no members." -ForegroundColor Yellow
-    return
+try {
+    $owners = @(Get-MgGroupOwner -GroupId $targetGroup.Id -All -ErrorAction Stop)
+} catch {
+    throw "Failed to retrieve owners for group '$GroupDisplayName'. $_"
 }
 
-Write-Host ("Removing {0} members from '{1}'" -f $members.Count, $GroupDisplayName) -ForegroundColor Red
+if ($members.Count -eq 0) {
+    Write-Host "Group '$GroupDisplayName' has no members." -ForegroundColor Yellow
+} else {
+    Write-Host ("Removing {0} members from '{1}'" -f $members.Count, $GroupDisplayName) -ForegroundColor Red
+}
 
-$removed = 0
-$failed = 0
+if ($owners.Count -eq 0) {
+    Write-Host "Group '$GroupDisplayName' has no owners." -ForegroundColor Yellow
+} else {
+    Write-Host ("Removing {0} owners from '{1}'" -f $owners.Count, $GroupDisplayName) -ForegroundColor Red
+}
+
+$memberRemoved = 0
+$memberFailed = 0
+$ownerRemoved = 0
+$ownerFailed = 0
 
 foreach ($member in $members) {
     $label = Get-PrincipalLabel -Principal $member
-    if (-not $PSCmdlet.ShouldProcess($label, "Remove from $GroupDisplayName")) {
+    if (-not $PSCmdlet.ShouldProcess($label, "Remove member from $GroupDisplayName")) {
         continue
     }
 
     try {
         Remove-MgGroupMemberByRef -GroupId $targetGroup.Id -DirectoryObjectId $member.Id -ErrorAction Stop
-        $removed++
-        Write-Host ("  Removed: {0}" -f $label)
+        $memberRemoved++
+        Write-Host ("  Member removed: {0}" -f $label)
     } catch {
-        $failed++
-        Write-Warning ("Failed to remove {0}. {1}" -f $label, $_.Exception.Message)
+        $memberFailed++
+        Write-Warning ("Failed to remove member {0}. {1}" -f $label, $_.Exception.Message)
+    }
+}
+
+foreach ($owner in $owners) {
+    $label = Get-PrincipalLabel -Principal $owner
+    if (-not $PSCmdlet.ShouldProcess($label, "Remove owner from $GroupDisplayName")) {
+        continue
+    }
+
+    try {
+        Remove-MgGroupOwnerByRef -GroupId $targetGroup.Id -DirectoryObjectId $owner.Id -ErrorAction Stop
+        $ownerRemoved++
+        Write-Host ("  Owner removed : {0}" -f $label)
+    } catch {
+        $ownerFailed++
+        Write-Warning ("Failed to remove owner {0}. {1}" -f $label, $_.Exception.Message)
     }
 }
 
 Write-Host ''
 Write-Host 'Summary' -ForegroundColor Cyan
-Write-Host ("  Removed : {0}" -f $removed)
-Write-Host ("  Failed  : {0}" -f $failed)
+Write-Host ("  Members removed : {0}" -f $memberRemoved)
+Write-Host ("  Member failures : {0}" -f $memberFailed)
+Write-Host ("  Owners removed  : {0}" -f $ownerRemoved)
+Write-Host ("  Owner failures  : {0}" -f $ownerFailed)
 
-if ($failed -gt 0) {
-    throw "Finished with $failed member removal failures. Review warnings above."
+if ($memberFailed -gt 0 -or $ownerFailed -gt 0) {
+    throw "Finished with removal failures (Members: $memberFailed, Owners: $ownerFailed). Review warnings above."
 }
 
-Write-Host ("Completed member removal for '{0}'." -f $GroupDisplayName) -ForegroundColor Green
+Write-Host ("Completed member and owner removal for '{0}'." -f $GroupDisplayName) -ForegroundColor Green
