@@ -137,12 +137,13 @@ function Add-GroupOwnerReference {
     }
 
     if ($addCmd) {
-        Add-MgGroupOwnerByRef -GroupId $GroupId -DirectoryObjectId $ownerId -BodyParameter $body -ErrorAction Stop
+        Add-MgGroupOwnerByRef -GroupId $GroupId -DirectoryObjectId $ownerId -ErrorAction Stop
         return
     }
 
     $jsonBody = $body | ConvertTo-Json -Depth 3 -Compress
-    Invoke-MgGraphRequest -Method POST -Uri "https://graph.microsoft.com/v1.0/groups/$GroupId/owners/\$ref" -Body $jsonBody -ContentType 'application/json' -ErrorAction Stop
+    $uri = "https://graph.microsoft.com/v1.0/groups/$GroupId/owners/`$ref"
+    Invoke-MgGraphRequest -Method POST -Uri $uri -Body $jsonBody -ContentType 'application/json' -ErrorAction Stop
 }
 
 foreach ($module in @('Microsoft.Graph.Authentication', 'Microsoft.Graph.Groups', 'Microsoft.Graph.Users')) {
