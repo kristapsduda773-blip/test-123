@@ -181,9 +181,13 @@ if (-not $groupRows) {
 }
 
 $principalRows = @()
-$processedGroups = 0
+$attemptedGroups = 0
+$resolvedGroups = 0
+$missingGroups = 0
 
 foreach ($groupRecord in $groupRows) {
+    $attemptedGroups++
+
     $groupId = ([string]$groupRecord.Id).Trim()
     $groupName = if ([string]::IsNullOrWhiteSpace([string]$groupRecord.DisplayName)) { '<unnamed>' } else { [string]$groupRecord.DisplayName }
 
@@ -191,8 +195,9 @@ foreach ($groupRecord in $groupRows) {
 
     try {
         $null = Get-MgGroup -GroupId $groupId -ErrorAction Stop
-        $processedGroups++
+        $resolvedGroups++
     } catch {
+        $missingGroups++
         Write-Warning ("  Unable to locate group with Id {0}. {1}" -f $groupId, $_.Exception.Message)
         continue
     }
@@ -230,13 +235,16 @@ foreach ($groupRecord in $groupRows) {
     }
 }
 
-if ($processedGroups -eq 0) {
-    Write-Warning 'No valid groups were found in the spreadsheet.'
-    return
-}
+Write-Host "`nSummary" -ForegroundColor Cyan
+Write-Host ("  Rows evaluated : {0}" -f $attemptedGroups)
+Write-Host ("  Found in Graph : {0}" -f $resolvedGroups)
+Write-Host ("  Missing        : {0}" -f $missingGroups)
 
 if (-not $principalRows -or $principalRows.Count -eq 0) {
     Write-Warning 'No owners or members were returned by Microsoft Graph.'
+    if ($resolvedGroups -eq 0) {
+        Write-Warning 'Verify that the Id column contains valid Entra ID group object IDs and that you have consent for Group.Read.All/GroupMember.Read.All.'
+    }
     return
 }
 
@@ -244,4 +252,4 @@ Write-Host "`nExporting results to '$OutputPath'" -ForegroundColor Cyan
 $principalRows |
     Export-Excel -Path $OutputPath -WorksheetName 'GroupPrincipals' -AutoSize -FreezeTopRow -TableName 'GroupPrincipals' -BoldTopRow
 
-Write-Host ('Completed export for {0} groups. {1} rows written.' -f $processedGroups, $principalRows.Count) -ForegroundColor Green
+Write-Host ('Completed export for {0} groups. {1} rows written.' -f $resolvedGroups, $principalRows.Count) -ForegroundColor Green
