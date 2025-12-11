@@ -126,6 +126,8 @@ Write-Host "Processing {0} group names..." -f $GroupNames.Count -ForegroundColor
 $principalRecords = @()
 $processedGroups = 0
 $missingGroups = 0
+$membersRemovedTotal = 0
+$memberRemovalFailures = 0
 
 foreach ($groupName in $GroupNames) {
     Write-Host "`n------------------------------------------------------------"
@@ -153,7 +155,6 @@ foreach ($groupName in $GroupNames) {
             $ownerObject = Get-ADObject -Identity $group.ManagedBy -Properties DisplayName, SamAccountName, mail, UserPrincipalName, ObjectClass, ObjectGuid
             $ownerDetails = Resolve-PrincipalDetails -DirectoryObject $ownerObject
             $owners = @($ownerDetails)
-            $principalRecords += New-PrincipalRecord -GroupName $resolvedName -GroupId $groupId -Role 'Owner' -Principal $ownerDetails
         } catch {
             Write-Warning ("Failed to resolve ManagedBy reference '{0}'. {1}" -f $group.ManagedBy, $_.Exception.Message)
         }
@@ -176,7 +177,21 @@ foreach ($groupName in $GroupNames) {
         try {
             $memberObject = Get-ADObject -Identity $member.DistinguishedName -Properties DisplayName, SamAccountName, mail, UserPrincipalName, ObjectClass, ObjectGuid
             $memberDetails = Resolve-PrincipalDetails -DirectoryObject $memberObject
-            $principalRecords += New-PrincipalRecord -GroupName $resolvedName -GroupId $groupId -Role 'Member' -Principal $memberDetails
+
+            $label = if ($memberDetails.UserPrincipalName) { $memberDetails.UserPrincipalName } else { $member.DistinguishedName }
+            if (-not $PSCmdlet.ShouldProcess($label, "Remove from $resolvedName")) {
+                continue
+            }
+
+            try {
+                Remove-ADGroupMember -Identity $group.DistinguishedName -Members $member -Confirm:$false -ErrorAction Stop
+                $membersRemovedTotal++
+                Write-Host ("    Removed member: {0}" -f $label)
+                $principalRecords += New-PrincipalRecord -GroupName $resolvedName -GroupId $groupId -Role 'Member' -Principal $memberDetails
+            } catch {
+                $memberRemovalFailures++
+                Write-Warning ("    Failed to remove member {0}. {1}" -f $label, $_.Exception.Message)
+            }
         } catch {
             Write-Warning ("Unable to resolve member '{0}'. {1}" -f $member.DistinguishedName, $_.Exception.Message)
         }
@@ -186,10 +201,15 @@ foreach ($groupName in $GroupNames) {
 Write-Host "`nSummary" -ForegroundColor Cyan
 Write-Host ("  Groups processed : {0}" -f $processedGroups)
 Write-Host ("  Groups missing   : {0}" -f $missingGroups)
-Write-Host ("  Principals found : {0}" -f $principalRecords.Count)
+Write-Host ("  Members removed  : {0}" -f $membersRemovedTotal)
+Write-Host ("  Removal failures : {0}" -f $memberRemovalFailures)
+
+if ($memberRemovalFailures -gt 0) {
+    Write-Warning 'One or more member removals failed. Review warnings above.'
+}
 
 if (-not $principalRecords -or $principalRecords.Count -eq 0) {
-    Write-Warning 'No owners or members were enumerated from Active Directory.'
+    Write-Warning 'No members were removed from Active Directory.'
     return
 }
 
