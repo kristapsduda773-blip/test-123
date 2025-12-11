@@ -144,7 +144,8 @@ foreach ($groupName in $GroupNames) {
 
     Write-Host ("DisplayName : {0}" -f $resolvedName)
     Write-Host ("ObjectGuid  : {0}" -f $groupId)
-    Write-Host ("ManagedBy   : {0}" -f ($group.ManagedBy ?? '<not set>'))
+    $managedByValue = if ([string]::IsNullOrWhiteSpace($group.ManagedBy)) { '<not set>' } else { $group.ManagedBy }
+    Write-Host ("ManagedBy   : {0}" -f $managedByValue)
 
     $owners = @()
     if ($group.ManagedBy) {
