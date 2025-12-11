@@ -1,5 +1,5 @@
 #requires -Version 5.1
-#requires -Modules ActiveDirectory, ImportExcel
+#requires -Modules ActiveDirectory
 
 [CmdletBinding(SupportsShouldProcess = $true)]
 param(
@@ -105,7 +105,6 @@ function Get-ADGroupByIdentity {
 }
 
 Ensure-Module -Name ActiveDirectory
-Ensure-Module -Name ImportExcel
 
 if (-not $GroupNames -or $GroupNames.Count -eq 0) {
     $GroupNames = $DefaultGroupNames
@@ -119,7 +118,7 @@ if (-not $GroupNames) {
 
 if (-not $OutputPath) {
     $timestamp = Get-Date -Format 'yyyyMMdd_HHmmss'
-    $OutputPath = Join-Path -Path (Get-Location) -ChildPath "OnPremGroupPrincipals_$timestamp.xlsx"
+    $OutputPath = Join-Path -Path (Get-Location) -ChildPath "OnPremGroupPrincipals_$timestamp.csv"
 }
 
 Write-Host "Processing {0} group names..." -f $GroupNames.Count -ForegroundColor Cyan
@@ -194,6 +193,6 @@ if (-not $principalRecords -or $principalRecords.Count -eq 0) {
 }
 
 Write-Host ("Exporting results to '{0}'" -f $OutputPath) -ForegroundColor Cyan
-$principalRecords | Export-Excel -Path $OutputPath -WorksheetName 'OnPremGroupPrincipals' -AutoSize -FreezeTopRow -TableName 'OnPremGroupPrincipals' -BoldTopRow
+$principalRecords | Export-Csv -Path $OutputPath -NoTypeInformation -Encoding UTF8
 
 Write-Host 'Completed on-prem group principal enumeration.' -ForegroundColor Green
